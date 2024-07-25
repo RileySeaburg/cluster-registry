@@ -66,7 +66,10 @@ spec:
               number: 5000
         path: /
         pathType: Prefix
-  tls: []
+  tls:
+  - hosts:
+    - $domain
+    secretName: registry-tls-secret
 "@
 
 # Declare the service

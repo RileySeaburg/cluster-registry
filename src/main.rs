@@ -49,7 +49,10 @@ spec:
               number: 5000
         path: /
         pathType: Prefix
-  tls: []
+  tls:
+  - hosts:
+    - {domain}
+    secretName: registry-tls-secret
 "#,
         domain = domain.trim(),
         namespace = namespace.trim()
