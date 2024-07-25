@@ -24,6 +24,26 @@ metadata:
     name: $namespace
 "@
 
+# Declare the service
+$namespace = $namespace.Trim()
+$service = @"
+apiVersion: v1
+kind: Service
+metadata:
+    name: container-registry-public
+    namespace: $namespace
+spec:
+    ports:
+    - port: 5000
+      targetPort: 5000
+    selector:
+        app: docker-registry
+"@
+
+# Write the service to a file
+$serviceFilePath = "service.yaml"
+Set-Content -Path $serviceFilePath -Value $service -Encoding UTF8
+
 # Create the ingress service YAML content
 $ingressService = @"
 apiVersion: networking.k8s.io/v1
@@ -49,6 +69,29 @@ spec:
   tls: []
 "@
 
+# Declare the service
+$namespace = $namespace.Trim()
+$service = @"
+apiVersion: v1
+kind: Service
+metadata:
+    name: container-registry-public
+    namespace: $namespace
+spec:
+    ports:
+    - port: 5000
+      targetPort: 5000
+    selector:
+        app: docker-registry
+"@
+
+# Write the service to a file
+$serviceFilePath = "service.yaml"
+Set-Content -Path $serviceFilePath -Value $service -Encoding UTF8
+
+# Create the service
+kubectl apply -f $serviceFilePath
+
 # Write registry namespace YAML to file
 $registryNamespaceFilePath = "registry-namespace.yaml"
 Set-Content -Path $registryNamespaceFilePath -Value $registryNamespace -Encoding UTF8
@@ -60,8 +103,11 @@ Set-Content -Path $ingressServiceFilePath -Value $ingressService -Encoding UTF8
 # Apply registry namespace
 kubectl apply -f $registryNamespaceFilePath
 
-# Apply ingress service
+# Apply ingress 
 kubectl apply -f $ingressServiceFilePath
+
+# Apply the service
+kubectl apply -f $serviceFilePath
 
 # Add Helm stable repository
 helm repo add stable https://charts.helm.sh/stable

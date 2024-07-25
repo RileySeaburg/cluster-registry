@@ -55,6 +55,35 @@ spec:
         namespace = namespace.trim()
     );
 
+    // declare the service 
+    let service: String = format!(
+        r#"apiVersion: v1
+kind: Service
+metadata:
+    name: container-registry-public
+    namespace: {namespace}
+spec:
+    ports:
+    - port: 5000
+      targetPort: 5000
+    selector:
+        app: docker-registry
+"#,
+        namespace = namespace.trim()
+    );
+
+    // write the service to a file
+    std::fs::write("service.yaml", service)
+        .expect("Failed to write the service to a file");
+
+    // create the service
+    std::process::Command::new("kubectl")
+        .arg("apply")
+        .arg("-f")
+        .arg("service.yaml")
+        .output()
+        .expect("Failed to create the service");
+
     // write the registry namespace to a file
     std::fs::write("registry-namespace.yaml", registry_namespace)
         .expect("Failed to write the registry namespace to a file");
