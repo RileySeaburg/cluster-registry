@@ -2,4 +2,8 @@
 name = "cluster-registry"
 version = "0.1.0"
 edition = "2021"
- 
+license = "MIT"
+description = "A simple cluster registry"
+repository = "https://github.com/RileySeaburg/cluster-registry"
+readme = "README.md"
+keywords = ["cluster", "registry", "distributed", "systems", "kubernetes"]
