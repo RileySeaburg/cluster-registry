@@ -95,17 +95,17 @@ kubectl apply -f $registryNamespaceFilePath
 # Install the registry using Helm with correct labels
 helm install $registryName stable/docker-registry `
   --namespace $namespace `
-  --set service.enabled=false`
-  --set "labels.app=container_registry" `
-  --set "labels.app\.kubernetes\.io/name=container_registry" `
-  --set "labels.app\.kubernetes\.io/instance=$registryName" `
-  --set "labels.app\.kubernetes\.io/version=2.8.1" `
-  --set "labels.app\.kubernetes\.io/component=registry" `
-  --set "labels.app\.kubernetes\.io/part-of=container-infrastructure" `
-  --set "labels.app\.kubernetes\.io/managed-by=helm" `
-  --set "labels.environment=development" `
-  --set "labels.team=devops"
-  # Create the service
+  --set service.enabled=false `
+  --set labels.app="container_registry" `
+  --set labels."app.kubernetes.io/name"="container_registry" `
+  --set labels."app.kubernetes.io/instance"=$registryName `
+  --set labels."app.kubernetes.io/version"="2.8.1" `
+  --set labels."app.kubernetes.io/component"="registry" `
+  --set labels."app.kubernetes.io/part-of"="container-infrastructure" `
+  --set labels."app.kubernetes.io/managed-by"="helm" `
+  --set labels.environment="development" `
+  --set labels.team="devops"
+# Create the service
 kubectl apply -f $serviceFilePath
 # Apply ingress 
 kubectl apply -f $ingressServiceFilePath
