@@ -1,4 +1,25 @@
 # PowerShell script to automate registry setup and installation
+# Add this function after the existing functions
+function Generate-ValuesYaml {
+    param(
+        [string]$registryName
+    )
+    return @"
+service:
+  enabled: false
+labels:
+  app: container_registry
+  app.kubernetes.io/name: container_registry
+  app.kubernetes.io/instance: $registryName
+  app.kubernetes.io/version: "2.8.1"
+  app.kubernetes.io/component: registry
+  app.kubernetes.io/part-of: container-infrastructure
+  app.kubernetes.io/managed-by: helm
+  environment: development
+  team: devops
+"@
+}
+
 # Function to read user input with prompt
 function Read-UserInput {
     param([string]$prompt)
@@ -92,19 +113,18 @@ helm repo add stable https://charts.helm.sh/stable
 helm repo update
 # Apply registry namespace
 kubectl apply -f $registryNamespaceFilePath
-# Install the registry using Helm with correct labels
+# Generate values.yaml content
+$valuesYamlContent = Generate-ValuesYaml -registryName $registryName
+
+# Write values.yaml to file
+$valuesYamlPath = "values.yaml"
+Set-Content -Path $valuesYamlPath -Value $valuesYamlContent -Encoding UTF8
+
+# Update the Helm install command
 helm install $registryName stable/docker-registry `
   --namespace $namespace `
-  --set service.enabled=false `
-  --set labels.app="container_registry" `
-  --set labels."app.kubernetes.io/name"="container_registry" `
-  --set labels."app.kubernetes.io/instance"=$registryName `
-  --set labels."app.kubernetes.io/version"="2.8.1" `
-  --set labels."app.kubernetes.io/component"="registry" `
-  --set labels."app.kubernetes.io/part-of"="container-infrastructure" `
-  --set labels."app.kubernetes.io/managed-by"="helm" `
-  --set labels.environment="development" `
-  --set labels.team="devops"
+  --values $valuesYamlPath
+
 # Create the service
 kubectl apply -f $serviceFilePath
 # Apply ingress 
