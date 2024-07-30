@@ -8,8 +8,8 @@ function Generate-ValuesYaml {
 service:
   enabled: false
 labels:
-  app: container_registry
-  app.kubernetes.io/name: container_registry
+  app: docker-registry
+  app.kubernetes.io/name: docker-registry
   app.kubernetes.io/instance: $registryName
   app.kubernetes.io/version: "2.8.1"
   app.kubernetes.io/component: registry
@@ -64,7 +64,7 @@ metadata:
   namespace: $namespace
 spec:
   selector:
-    app: container_registry
+    app: docker-registry
   ports:
   - protocol: TCP
     port: 80
