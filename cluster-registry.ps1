@@ -17,24 +17,6 @@ labels:
   app.kubernetes.io/managed-by: helm
   environment: development
   team: devops
-livenessProbe:
-  failureThreshold: 3
-  httpGet:
-    path: /
-    port: 5000
-    scheme: HTTP
-  periodSeconds: 10
-  successThreshold: 1
-  timeoutSeconds: 1
-readinessProbe:
-  failureThreshold: 3
-  httpGet:
-    path: /
-    port: 5000
-    scheme: HTTP
-  periodSeconds: 10
-  successThreshold: 1
-  timeoutSeconds: 1
 "@
 }
 
