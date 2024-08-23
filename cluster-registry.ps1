@@ -79,18 +79,33 @@ function Read-UserInput {
 
 function Sanitize-Name {
     param([string]$name)
-    # Convert to lowercase
     $name = $name.ToLower()
-    # Replace any character that's not a-z, 0-9, '-', or '.' with '-'
     $name = $name -replace '[^a-z0-9\-\.]', '-'
-    # Ensure it starts and ends with an alphanumeric character
     $name = $name -replace '^[^a-z0-9]+', ''
     $name = $name -replace '[^a-z0-9]+$', ''
-    # Truncate to 53 characters if necessary
     if ($name.Length -gt 53) {
         $name = $name.Substring(0, 53)
     }
     return $name
+}
+
+function Create-TLSSecret {
+    param(
+        [string]$namespace,
+        [string]$secretName,
+        [string]$certFile,
+        [string]$keyFile
+    )
+
+    if (-not (Test-Path $certFile) -or -not (Test-Path $keyFile)) {
+        Write-Host "Certificate files not found. Please ensure registry.crt and registry.key are in the same directory as this script."
+        exit 1
+    }
+
+    kubectl create secret tls $secretName `
+        --cert=$certFile `
+        --key=$keyFile `
+        --namespace=$namespace
 }
 
 # Ask user for registry name
@@ -133,8 +148,17 @@ spec:
   selector:
     app: docker-registry
   ports:
-  - protocol: TCP
+  - name: registry
+    protocol: TCP
     port: 5000
+    targetPort: 5000
+  - name: http
+    protocol: TCP
+    port: 80
+    targetPort: 5000
+  - name: https
+    protocol: TCP
+    port: 443
     targetPort: 5000
   type: ClusterIP
 "@
@@ -148,8 +172,13 @@ metadata:
   namespace: $namespace
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: 5g
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
 spec:
   ingressClassName: nginx
+  tls:
+  - hosts:
+    - $domain
+    secretName: registry-tls-secret
   rules:
   - host: $domain
     http:
@@ -189,6 +218,9 @@ helm repo update
 
 # Apply registry namespace
 kubectl apply -f $registryNamespaceFilePath
+
+# Create TLS secret
+Create-TLSSecret -namespace $namespace -secretName "registry-tls-secret" -certFile "registry.crt" -keyFile "registry.key"
 
 # Generate values.yaml content
 $valuesYamlContent = Generate-ValuesYaml -registryName $registryName -storageType $storageType -storagePath $storagePath -storageNodepool $storageNodepool
