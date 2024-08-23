@@ -156,31 +156,76 @@ spec:
     }
 }
 
+
+function Create-DirectoryDaemonSet {
+    param(
+        [string]$namespace,
+        [string]$nodepoolName,
+        [string]$directoryPath
+    )
+
+    $daemonSet = @"
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: registry-directory-creator
+  namespace: $namespace
+spec:
+  selector:
+    matchLabels:
+      name: registry-directory-creator
+  template:
+    metadata:
+      labels:
+        name: registry-directory-creator
+    spec:
+      nodeSelector:
+        agentpool: $nodepoolName
+      containers:
+      - name: directory-creator
+        image: busybox
+        command: ["/bin/sh", "-c", "mkdir -p $directoryPath && chmod 777 $directoryPath && sleep infinity"]
+        volumeMounts:
+        - name: host-mnt
+          mountPath: /mnt
+      volumes:
+      - name: host-mnt
+        hostPath:
+          path: /mnt
+      tolerations:
+      - operator: Exists
+"@
+
+    $daemonSetPath = "registry-directory-creator-daemonset.yaml"
+    Set-Content -Path $daemonSetPath -Value $daemonSet
+    kubectl apply -f $daemonSetPath
+}
+
 try {
 
   # Ask user for registry name
   $registryName = Read-UserInput "Enter the name of the registry: "
   $registryName = Sanitize-Name $registryName
-  
+
   # Ask user for domain name
   $domain = Read-UserInput "Enter your domain name: "
-  
+
   # Ask for nodepool name and storage path
   $nodepoolName = Read-UserInput "Enter the name of the storage nodepool: "
   $storagePath = Read-UserInput "Enter the path for local storage on the nodes: "
-  
+
   # Define namespace for private domains
   $namespace = "container-registry"
-  
+
   # Delete the namespace if it currently exists
   kubectl delete namespace $namespace
-  
+
   # Wait for namespace deletion to complete
   Write-Host "Waiting for namespace deletion to complete..."
   while (kubectl get namespace $namespace 2>$null) {
       Start-Sleep -Seconds 5
   }
-  
+
 # Create the registry namespace YAML content
 $registryNamespace = @"
 apiVersion: v1
@@ -256,6 +301,13 @@ spec:
 
   # Apply registry namespace
   kubectl apply -f $registryNamespaceFilePath
+
+  # After creating the namespace and before creating PersistentVolumes
+  Create-DirectoryDaemonSet -namespace $namespace -nodepoolName $nodepoolName -directoryPath $storagePath
+
+  # Wait for DaemonSet to be ready
+  Write-Host "Waiting for DaemonSet to create directories on all nodes..."
+  kubectl rollout status daemonset/registry-directory-creator -n $namespace --timeout=300s
 
   # Create storage pool resources
   Create-StoragePoolResources -namespace $namespace -nodepoolName $nodepoolName -storagePath $storagePath
