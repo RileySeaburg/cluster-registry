@@ -1,10 +1,13 @@
 # PowerShell script to automate registry setup and installation
-# Add this function after the existing functions
+
 function Generate-ValuesYaml {
     param(
-        [string]$registryName
+        [string]$registryName,
+        [string]$storageType,
+        [string]$storagePath,
+        [string]$storageNodepool
     )
-    return @"
+    $valuesYaml = @"
 service:
   enabled: false
 labels:
@@ -18,14 +21,44 @@ labels:
   environment: development
   team: devops
 "@
+
+    if ($storageType -eq "nodepool") {
+        $valuesYaml += @"
+
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 100Gi
+  volumes:
+    - name: data
+      hostPath:
+        path: $storagePath
+        type: DirectoryOrCreate
+nodeSelector:
+  agentpool: $storageNodepool
+"@
+    }
+    elseif ($storageType -eq "managed-disk") {
+        $valuesYaml += @"
+
+persistence:
+  enabled: true
+  storageClass: managed-premium
+  accessMode: ReadWriteOnce
+  size: 100Gi
+"@
+    }
+
+    return $valuesYaml
 }
 
-# Function to read user input with prompt
 function Read-UserInput {
     param([string]$prompt)
     Write-Host $prompt -NoNewline
     return (Read-Host)
 }
+
 function Sanitize-Name {
     param([string]$name)
     # Convert to lowercase
@@ -41,13 +74,28 @@ function Sanitize-Name {
     }
     return $name
 }
+
 # Ask user for registry name
 $registryName = Read-UserInput "Enter the name of the registry: "
 $registryName = Sanitize-Name $registryName
+
 # Ask user for domain name
 $domain = Read-UserInput "Enter your domain name: "
+
+# Ask user for storage type
+$storageType = Read-UserInput "Enter storage type (nodepool/managed-disk): "
+
+$storagePath = ""
+$storageNodepool = ""
+
+if ($storageType -eq "nodepool") {
+    $storagePath = Read-UserInput "Enter the storage path on the nodes (e.g., /mnt/registry-data): "
+    $storageNodepool = Read-UserInput "Enter the name of the storage nodepool: "
+}
+
 # Define namespace for private domains
 $namespace = "container-registry"
+
 # Create the registry namespace YAML content
 $registryNamespace = @"
 apiVersion: v1
@@ -55,6 +103,7 @@ kind: Namespace
 metadata:
     name: $namespace
 "@
+
 # Create the service YAML content
 $service = @"
 apiVersion: v1
@@ -71,6 +120,7 @@ spec:
     targetPort: 5000
   type: ClusterIP
 "@
+
 # Create the ingress service YAML content
 $ingressService = @"
 apiVersion: networking.k8s.io/v1
@@ -94,27 +144,36 @@ spec:
             port:
               number: 5000
 "@
+
 # Write the service to a file
 $serviceFilePath = "service.yaml"
 Set-Content -Path $serviceFilePath -Value $service -Encoding UTF8
+
 # Write registry namespace YAML to file
 $registryNamespaceFilePath = "registry-namespace.yaml"
 Set-Content -Path $registryNamespaceFilePath -Value $registryNamespace -Encoding UTF8
+
 # Write ingress service YAML to file
 $ingressServiceFilePath = "ingress-service.yaml"
 Set-Content -Path $ingressServiceFilePath -Value $ingressService -Encoding UTF8
+
 # delete the namespace if it currently exists
 kubectl delete namespace $namespace
+
 # confirm namespace has been deleted
 Write-Host "Namespace deleted successfully" 
+
 # Add Helm stable repository
 helm repo add stable https://charts.helm.sh/stable
+
 # Update Helm repositories
 helm repo update
+
 # Apply registry namespace
 kubectl apply -f $registryNamespaceFilePath
+
 # Generate values.yaml content
-$valuesYamlContent = Generate-ValuesYaml -registryName $registryName
+$valuesYamlContent = Generate-ValuesYaml -registryName $registryName -storageType $storageType -storagePath $storagePath -storageNodepool $storageNodepool
 
 # Write values.yaml to file
 $valuesYamlPath = "values.yaml"
@@ -127,7 +186,9 @@ helm install $registryName stable/docker-registry `
 
 # Create the service
 kubectl apply -f $serviceFilePath
+
 # Apply ingress 
 kubectl apply -f $ingressServiceFilePath
+
 # Notify user of successful installation
 Write-Host "Registry installed successfully"
