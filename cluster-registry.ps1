@@ -223,7 +223,7 @@ try {
   # Wait for namespace deletion to complete
   Write-Host "Waiting for namespace deletion to complete..."
   while (kubectl get namespace $namespace 2>$null) {
-      Start-Sleep -Seconds 5
+      Start-Sleep -Seconds 500
   }
 
 # Create the registry namespace YAML content
@@ -311,6 +311,21 @@ spec:
 
   # Create storage pool resources
   Create-StoragePoolResources -namespace $namespace -nodepoolName $nodepoolName -storagePath $storagePath
+
+  # Wait for PersistentVolumes to be ready
+  Write-Host "Waiting for PersistentVolumes to be created..."
+  while ((kubectl get pv -o jsonpath='{.items[*].status.phase}' | Select-String -Pattern "Available" -Quiet) -eq $true) {
+      Start-Sleep -Seconds 5
+}
+
+  # Clean up DaemonSet
+  kubectl delete daemonset registry-directory-creator -n $namespace
+
+  # Wait for DaemonSet to be deleted
+  Write-Host "Waiting for DaemonSet to be deleted..."
+  while (kubectl get daemonset registry-directory-creator -n $namespace 2>$null) {
+      Start-Sleep -Seconds 5
+  }
 
   # Create TLS secret
   Create-TLSSecret -namespace $namespace -secretName "registry-tls-secret" -certFile "registry.crt" -keyFile "registry.key"
