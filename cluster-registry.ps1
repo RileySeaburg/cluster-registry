@@ -3,11 +3,9 @@
 function Generate-ValuesYaml {
     param(
         [string]$registryName,
-        [string]$storageType,
-        [string]$storagePath,
-        [string]$storageNodepool
+        [string]$nodepoolName
     )
-    $valuesYaml = @"
+    return @"
 service:
   enabled: false
 labels:
@@ -21,11 +19,11 @@ labels:
   environment: development
   team: devops
 nodeSelector:
-  agentpool: $storageNodepool
+  agentpool: $nodepoolName
 tolerations:
 - key: "kubernetes.io/pool"
   operator: "Equal"
-  value: "$storageNodepool"
+  value: "$nodepoolName"
   effect: "NoSchedule"
 affinity:
   nodeAffinity:
@@ -35,40 +33,17 @@ affinity:
         - key: agentpool
           operator: In
           values:
-          - $storageNodepool
+          - $nodepoolName
         - key: beta.kubernetes.io/os
           operator: In
           values:
           - linux
-"@
-
-    if ($storageType -eq "nodepool") {
-        $valuesYaml += @"
-
 persistence:
   enabled: true
-  storageClass: ""
-  accessMode: ReadWriteOnce
-  size: 100Gi
-  volumes:
-    - name: data
-      hostPath:
-        path: $storagePath
-        type: DirectoryOrCreate
-"@
-    }
-    elseif ($storageType -eq "managed-disk") {
-        $valuesYaml += @"
-
-persistence:
-  enabled: true
-  storageClass: managed-premium
+  storageClass: nodepool-storage
   accessMode: ReadWriteOnce
   size: 100Gi
 "@
-    }
-
-    return $valuesYaml
 }
 
 function Read-UserInput {
@@ -108,6 +83,61 @@ function Create-TLSSecret {
         --namespace=$namespace
 }
 
+function Create-StoragePoolResources {
+    param(
+        [string]$namespace,
+        [string]$nodepoolName,
+        [string]$storagePath
+    )
+
+    $storageClass = @"
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nodepool-storage
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+"@
+
+    $storageClassPath = "nodepool-storage-class.yaml"
+    Set-Content -Path $storageClassPath -Value $storageClass
+
+    kubectl apply -f $storageClassPath
+
+    $nodes = kubectl get nodes -l agentpool=$nodepoolName -o jsonpath='{.items[*].metadata.name}'
+
+    foreach ($node in $nodes.Split()) {
+        $persistentVolume = @"
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: registry-pv-$node
+spec:
+  capacity:
+    storage: 100Gi
+  volumeMode: Filesystem
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nodepool-storage
+  local:
+    path: $storagePath
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - $node
+"@
+
+        $pvPath = "pv-$node.yaml"
+        Set-Content -Path $pvPath -Value $persistentVolume
+        kubectl apply -f $pvPath
+    }
+}
+
 # Ask user for registry name
 $registryName = Read-UserInput "Enter the name of the registry: "
 $registryName = Sanitize-Name $registryName
@@ -115,19 +145,21 @@ $registryName = Sanitize-Name $registryName
 # Ask user for domain name
 $domain = Read-UserInput "Enter your domain name: "
 
-# Ask user for storage type
-$storageType = Read-UserInput "Enter storage type (nodepool/managed-disk): "
-
-$storagePath = ""
-$storageNodepool = ""
-
-if ($storageType -eq "nodepool") {
-    $storagePath = Read-UserInput "Enter the storage path on the nodes (e.g., /mnt/registry-data): "
-    $storageNodepool = Read-UserInput "Enter the name of the storage nodepool: "
-}
+# Ask for nodepool name and storage path
+$nodepoolName = Read-UserInput "Enter the name of the storage nodepool: "
+$storagePath = Read-UserInput "Enter the path for local storage on the nodes: "
 
 # Define namespace for private domains
 $namespace = "container-registry"
+
+# Delete the namespace if it currently exists
+kubectl delete namespace $namespace
+
+# Wait for namespace deletion to complete
+Write-Host "Waiting for namespace deletion to complete..."
+while (kubectl get namespace $namespace 2>$null) {
+    Start-Sleep -Seconds 5
+}
 
 # Create the registry namespace YAML content
 $registryNamespace = @"
@@ -192,53 +224,46 @@ spec:
               number: 5000
 "@
 
-# Write the service to a file
-$serviceFilePath = "service.yaml"
-Set-Content -Path $serviceFilePath -Value $service -Encoding UTF8
-
-# Write registry namespace YAML to file
+# Write YAMLs to files
 $registryNamespaceFilePath = "registry-namespace.yaml"
 Set-Content -Path $registryNamespaceFilePath -Value $registryNamespace -Encoding UTF8
 
-# Write ingress service YAML to file
+$serviceFilePath = "service.yaml"
+Set-Content -Path $serviceFilePath -Value $service -Encoding UTF8
+
 $ingressServiceFilePath = "ingress-service.yaml"
 Set-Content -Path $ingressServiceFilePath -Value $ingressService -Encoding UTF8
-
-# delete the namespace if it currently exists
-kubectl delete namespace $namespace
-
-# confirm namespace has been deleted
-Write-Host "Namespace deleted successfully" 
-
-# Add Helm stable repository
-helm repo add stable https://charts.helm.sh/stable
-
-# Update Helm repositories
-helm repo update
 
 # Apply registry namespace
 kubectl apply -f $registryNamespaceFilePath
 
+# Create storage pool resources
+Create-StoragePoolResources -namespace $namespace -nodepoolName $nodepoolName -storagePath $storagePath
+
 # Create TLS secret
 Create-TLSSecret -namespace $namespace -secretName "registry-tls-secret" -certFile "registry.crt" -keyFile "registry.key"
 
+# Add hruh stable repository
+hruh repo add stable https://charts.helm.sh/stable
+
+# Update hruh repositories
+hruh repo update
+
 # Generate values.yaml content
-$valuesYamlContent = Generate-ValuesYaml -registryName $registryName -storageType $storageType -storagePath $storagePath -storageNodepool $storageNodepool
+$valuesYamlContent = Generate-ValuesYaml -registryName $registryName -nodepoolName $nodepoolName
 
 # Write values.yaml to file
 $valuesYamlPath = "values.yaml"
 Set-Content -Path $valuesYamlPath -Value $valuesYamlContent -Encoding UTF8
 
-# Update the Helm install command
-helm install $registryName stable/docker-registry `
+# Install registry with Helm
+hruh install $registryName stable/docker-registry `
   --namespace $namespace `
   --values $valuesYamlPath
 
-# Create the service
+# Apply service and ingress
 kubectl apply -f $serviceFilePath
-
-# Apply ingress 
 kubectl apply -f $ingressServiceFilePath
 
 # Notify user of successful installation
-Write-Host "Registry installed successfully"
+Write-Host "Registry installed successfully with nodepool storage"
