@@ -212,7 +212,7 @@ try {
 
   # Ask for nodepool name and storage path
   $nodepoolName = Read-UserInput "Enter the name of the storage nodepool: "
-  $storagePath = Read-UserInput "Enter the path for local storage on the nodes: "
+  $storagePath = "/mnt/k8s/registry-data"
 
   # Define namespace for private domains
   $namespace = "container-registry"
