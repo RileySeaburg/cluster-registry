@@ -43,6 +43,11 @@ persistence:
   storageClass: nodepool-storage
   accessMode: ReadWriteOnce
   size: 100Gi
+volumePermissions:
+  enabled: true
+storage:
+  filesystem:
+    rootdirectory: /var/lib/registry
 "@
 }
 
@@ -156,7 +161,6 @@ spec:
     }
 }
 
-
 function Create-DirectoryDaemonSet {
     param(
         [string]$namespace,
@@ -202,40 +206,39 @@ spec:
 }
 
 try {
+    # Define namespace for private domains
+    $namespace = "container-registry"
 
-  # Ask user for registry name
-  $registryName = Read-UserInput "Enter the name of the registry: "
-  $registryName = Sanitize-Name $registryName
+    # Delete the namespace if it currently exists
+    kubectl delete namespace $namespace
 
-  # Ask user for domain name
-  $domain = Read-UserInput "Enter your domain name: "
+    # Wait for namespace deletion to complete
+    Write-Host "Waiting for namespace deletion to complete..."
+    while (kubectl get namespace $namespace 2>$null) {
+        Start-Sleep -Seconds 5
+    }
 
-  # Ask for nodepool name and storage path
-  $nodepoolName = Read-UserInput "Enter the name of the storage nodepool: "
-  $storagePath = "/mnt/k8s/registry-data"
+    # Ask user for registry name
+    $registryName = Read-UserInput "Enter the name of the registry: "
+    $registryName = Sanitize-Name $registryName
 
-  # Define namespace for private domains
-  $namespace = "container-registry"
+    # Ask user for domain name
+    $domain = Read-UserInput "Enter your domain name: "
 
-  # Delete the namespace if it currently exists
-  kubectl delete namespace $namespace
+    # Ask for nodepool name and set storage path
+    $nodepoolName = Read-UserInput "Enter the name of the storage nodepool: "
+    $storagePath = "/mnt/k8s/registry-data"
 
-  # Wait for namespace deletion to complete
-  Write-Host "Waiting for namespace deletion to complete..."
-  while (kubectl get namespace $namespace 2>$null) {
-      Start-Sleep -Seconds 500
-  }
-
-# Create the registry namespace YAML content
-$registryNamespace = @"
+    # Create the registry namespace YAML content
+    $registryNamespace = @"
 apiVersion: v1
 kind: Namespace
 metadata:
     name: $namespace
 "@
 
-# Create the service YAML content
-$service = @"
+    # Create the service YAML content
+    $service = @"
 apiVersion: v1
 kind: Service
 metadata:
@@ -260,8 +263,8 @@ spec:
   type: ClusterIP
 "@
 
-# Create the ingress service YAML content
-$ingressService = @"
+    # Create the ingress service YAML content
+    $ingressService = @"
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -289,75 +292,82 @@ spec:
               number: 5000
 "@
 
-  # Write YAMLs to files
-  $registryNamespaceFilePath = "registry-namespace.yaml"
-  Set-Content -Path $registryNamespaceFilePath -Value $registryNamespace -Encoding UTF8
+    # Write YAMLs to files
+    $registryNamespaceFilePath = "registry-namespace.yaml"
+    Set-Content -Path $registryNamespaceFilePath -Value $registryNamespace -Encoding UTF8
 
-  $serviceFilePath = "service.yaml"
-  Set-Content -Path $serviceFilePath -Value $service -Encoding UTF8
+    $serviceFilePath = "service.yaml"
+    Set-Content -Path $serviceFilePath -Value $service -Encoding UTF8
 
-  $ingressServiceFilePath = "ingress-service.yaml"
-  Set-Content -Path $ingressServiceFilePath -Value $ingressService -Encoding UTF8
+    $ingressServiceFilePath = "ingress-service.yaml"
+    Set-Content -Path $ingressServiceFilePath -Value $ingressService -Encoding UTF8
 
-  # Apply registry namespace
-  kubectl apply -f $registryNamespaceFilePath
+    # Apply registry namespace
+    kubectl apply -f $registryNamespaceFilePath
 
-  # After creating the namespace and before creating PersistentVolumes
-  Create-DirectoryDaemonSet -namespace $namespace -nodepoolName $nodepoolName -directoryPath $storagePath
+    # Create directory DaemonSet
+    Create-DirectoryDaemonSet -namespace $namespace -nodepoolName $nodepoolName -directoryPath $storagePath
 
-  # Wait for DaemonSet to be ready
-  Write-Host "Waiting for DaemonSet to create directories on all nodes..."
-  kubectl rollout status daemonset/registry-directory-creator -n $namespace --timeout=300s
+    # Wait for DaemonSet to be ready
+    Write-Host "Waiting for DaemonSet to create directories on all nodes..."
+    kubectl rollout status daemonset/registry-directory-creator -n $namespace --timeout=300s
 
-  # Create storage pool resources
-  Create-StoragePoolResources -namespace $namespace -nodepoolName $nodepoolName -storagePath $storagePath
+    # Create storage pool resources
+    Create-StoragePoolResources -namespace $namespace -nodepoolName $nodepoolName -storagePath $storagePath
 
-  # Wait for PersistentVolumes to be ready
-  Write-Host "Waiting for PersistentVolumes to be created..."
-  while ((kubectl get pv -o jsonpath='{.items[*].status.phase}' | Select-String -Pattern "Available" -Quiet) -eq $true) {
-      Start-Sleep -Seconds 5
+    # Wait for PersistentVolumes to be ready
+    Write-Host "Waiting for PersistentVolumes to be created..."
+    Start-Sleep -Seconds 10  # Give some time for PVs to be created
+    while ((kubectl get pv -l app=docker-registry -o jsonpath='{.items[*].status.phase}' | Select-String -Pattern "Available" -Quiet) -eq $false) {
+        Start-Sleep -Seconds 5
+    }
+
+    # Clean up DaemonSet
+    kubectl delete daemonset registry-directory-creator -n $namespace
+
+    # Wait for DaemonSet to be deleted
+    Write-Host "Waiting for DaemonSet to be deleted..."
+    while (kubectl get daemonset registry-directory-creator -n $namespace 2>$null) {
+        Start-Sleep -Seconds 5
+    }
+
+    # Create TLS secret
+    Create-TLSSecret -namespace $namespace -secretName "registry-tls-secret" -certFile "registry.crt" -keyFile "registry.key"
+
+    # Add Helm stable repository
+    helm repo add stable https://charts.helm.sh/stable
+
+    # Update Helm repositories
+    helm repo update
+
+    # Generate values.yaml content
+    $valuesYamlContent = Generate-ValuesYaml -registryName $registryName -nodepoolName $nodepoolName
+
+    # Write values.yaml to file
+    $valuesYamlPath = "values.yaml"
+    Set-Content -Path $valuesYamlPath -Value $valuesYamlContent -Encoding UTF8
+
+    # Install registry with Helm
+    helm install $registryName stable/docker-registry `
+        --namespace $namespace `
+        --values $valuesYamlPath
+
+    # Apply service and ingress
+    kubectl apply -f $serviceFilePath
+    kubectl apply -f $ingressServiceFilePath
+
+    # Notify user of successful installation
+    Write-Host "Registry installed successfully with nodepool storage"
+
+    # Final checks
+    Write-Host "Performing final checks..."
+    kubectl get pods -n $namespace
+    kubectl get pvc -n $namespace
+    kubectl get pv -l app=docker-registry
+
 }
-
-  # Clean up DaemonSet
-  kubectl delete daemonset registry-directory-creator -n $namespace
-
-  # Wait for DaemonSet to be deleted
-  Write-Host "Waiting for DaemonSet to be deleted..."
-  while (kubectl get daemonset registry-directory-creator -n $namespace 2>$null) {
-      Start-Sleep -Seconds 5
-  }
-
-  # Create TLS secret
-  Create-TLSSecret -namespace $namespace -secretName "registry-tls-secret" -certFile "registry.crt" -keyFile "registry.key"
-
-  # Add hruh stable repository
-  hruh repo add stable https://charts.helm.sh/stable
-
-  # Update hruh repositories
-  hruh repo update
-
-  # Generate values.yaml content
-  $valuesYamlContent = Generate-ValuesYaml -registryName $registryName -nodepoolName $nodepoolName
-
-  # Write values.yaml to file
-  $valuesYamlPath = "values.yaml"
-  Set-Content -Path $valuesYamlPath -Value $valuesYamlContent -Encoding UTF8
-
-  # Install registry with Helm
-  hruh install $registryName stable/docker-registry `
-    --namespace $namespace `
-    --values $valuesYamlPath
-
-  # Apply service and ingress
-  kubectl apply -f $serviceFilePath
-  kubectl apply -f $ingressServiceFilePath
-
-  # Notify user of successful installation
-  Write-Host "Registry installed successfully with nodepool storage"
-}
-
 catch {
-      Write-Host "An error occurred:"
+    Write-Host "An error occurred:"
     Write-Host $_.Exception.Message
     Write-Host "Stack Trace:"
     Write-Host $_.ScriptStackTrace
