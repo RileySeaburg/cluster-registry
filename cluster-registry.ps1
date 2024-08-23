@@ -46,10 +46,28 @@ persistence:
 "@
 }
 
+function Get-NodepoolNames {
+    $nodepools = kubectl get nodes -o jsonpath='{.items[*].metadata.labels.agentpool}' | Select-Object -Unique
+    return $nodepools -split '\s+'
+}
+
 function Read-UserInput {
-    param([string]$prompt)
-    Write-Host $prompt -NoNewline
-    return (Read-Host)
+    param(
+        [string]$prompt,
+        [string[]]$validOptions = @(),
+        [bool]$allowCustom = $false
+    )
+    while ($true) {
+        Write-Host $prompt -NoNewline
+        $input = Read-Host
+        if ($validOptions.Count -eq 0 -or $allowCustom) {
+            return $input
+        }
+        if ($input -in $validOptions) {
+            return $input
+        }
+        Write-Host "Invalid input. Please choose from the following options: $($validOptions -join ', ')"
+    }
 }
 
 function Sanitize-Name {
@@ -138,29 +156,31 @@ spec:
     }
 }
 
-# Ask user for registry name
-$registryName = Read-UserInput "Enter the name of the registry: "
-$registryName = Sanitize-Name $registryName
+try {
 
-# Ask user for domain name
-$domain = Read-UserInput "Enter your domain name: "
-
-# Ask for nodepool name and storage path
-$nodepoolName = Read-UserInput "Enter the name of the storage nodepool: "
-$storagePath = Read-UserInput "Enter the path for local storage on the nodes: "
-
-# Define namespace for private domains
-$namespace = "container-registry"
-
-# Delete the namespace if it currently exists
-kubectl delete namespace $namespace
-
-# Wait for namespace deletion to complete
-Write-Host "Waiting for namespace deletion to complete..."
-while (kubectl get namespace $namespace 2>$null) {
-    Start-Sleep -Seconds 5
-}
-
+  # Ask user for registry name
+  $registryName = Read-UserInput "Enter the name of the registry: "
+  $registryName = Sanitize-Name $registryName
+  
+  # Ask user for domain name
+  $domain = Read-UserInput "Enter your domain name: "
+  
+  # Ask for nodepool name and storage path
+  $nodepoolName = Read-UserInput "Enter the name of the storage nodepool: "
+  $storagePath = Read-UserInput "Enter the path for local storage on the nodes: "
+  
+  # Define namespace for private domains
+  $namespace = "container-registry"
+  
+  # Delete the namespace if it currently exists
+  kubectl delete namespace $namespace
+  
+  # Wait for namespace deletion to complete
+  Write-Host "Waiting for namespace deletion to complete..."
+  while (kubectl get namespace $namespace 2>$null) {
+      Start-Sleep -Seconds 5
+  }
+  
 # Create the registry namespace YAML content
 $registryNamespace = @"
 apiVersion: v1
@@ -224,46 +244,54 @@ spec:
               number: 5000
 "@
 
-# Write YAMLs to files
-$registryNamespaceFilePath = "registry-namespace.yaml"
-Set-Content -Path $registryNamespaceFilePath -Value $registryNamespace -Encoding UTF8
+  # Write YAMLs to files
+  $registryNamespaceFilePath = "registry-namespace.yaml"
+  Set-Content -Path $registryNamespaceFilePath -Value $registryNamespace -Encoding UTF8
 
-$serviceFilePath = "service.yaml"
-Set-Content -Path $serviceFilePath -Value $service -Encoding UTF8
+  $serviceFilePath = "service.yaml"
+  Set-Content -Path $serviceFilePath -Value $service -Encoding UTF8
 
-$ingressServiceFilePath = "ingress-service.yaml"
-Set-Content -Path $ingressServiceFilePath -Value $ingressService -Encoding UTF8
+  $ingressServiceFilePath = "ingress-service.yaml"
+  Set-Content -Path $ingressServiceFilePath -Value $ingressService -Encoding UTF8
 
-# Apply registry namespace
-kubectl apply -f $registryNamespaceFilePath
+  # Apply registry namespace
+  kubectl apply -f $registryNamespaceFilePath
 
-# Create storage pool resources
-Create-StoragePoolResources -namespace $namespace -nodepoolName $nodepoolName -storagePath $storagePath
+  # Create storage pool resources
+  Create-StoragePoolResources -namespace $namespace -nodepoolName $nodepoolName -storagePath $storagePath
 
-# Create TLS secret
-Create-TLSSecret -namespace $namespace -secretName "registry-tls-secret" -certFile "registry.crt" -keyFile "registry.key"
+  # Create TLS secret
+  Create-TLSSecret -namespace $namespace -secretName "registry-tls-secret" -certFile "registry.crt" -keyFile "registry.key"
 
-# Add hruh stable repository
-hruh repo add stable https://charts.helm.sh/stable
+  # Add hruh stable repository
+  hruh repo add stable https://charts.helm.sh/stable
 
-# Update hruh repositories
-hruh repo update
+  # Update hruh repositories
+  hruh repo update
 
-# Generate values.yaml content
-$valuesYamlContent = Generate-ValuesYaml -registryName $registryName -nodepoolName $nodepoolName
+  # Generate values.yaml content
+  $valuesYamlContent = Generate-ValuesYaml -registryName $registryName -nodepoolName $nodepoolName
 
-# Write values.yaml to file
-$valuesYamlPath = "values.yaml"
-Set-Content -Path $valuesYamlPath -Value $valuesYamlContent -Encoding UTF8
+  # Write values.yaml to file
+  $valuesYamlPath = "values.yaml"
+  Set-Content -Path $valuesYamlPath -Value $valuesYamlContent -Encoding UTF8
 
-# Install registry with Helm
-hruh install $registryName stable/docker-registry `
-  --namespace $namespace `
-  --values $valuesYamlPath
+  # Install registry with Helm
+  hruh install $registryName stable/docker-registry `
+    --namespace $namespace `
+    --values $valuesYamlPath
 
-# Apply service and ingress
-kubectl apply -f $serviceFilePath
-kubectl apply -f $ingressServiceFilePath
+  # Apply service and ingress
+  kubectl apply -f $serviceFilePath
+  kubectl apply -f $ingressServiceFilePath
 
-# Notify user of successful installation
-Write-Host "Registry installed successfully with nodepool storage"
+  # Notify user of successful installation
+  Write-Host "Registry installed successfully with nodepool storage"
+}
+
+catch {
+      Write-Host "An error occurred:"
+    Write-Host $_.Exception.Message
+    Write-Host "Stack Trace:"
+    Write-Host $_.ScriptStackTrace
+}
