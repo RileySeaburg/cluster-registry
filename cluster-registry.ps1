@@ -20,6 +20,26 @@ labels:
   app.kubernetes.io/managed-by: helm
   environment: development
   team: devops
+nodeSelector:
+  agentpool: $storageNodepool
+tolerations:
+- key: "kubernetes.io/pool"
+  operator: "Equal"
+  value: "$storageNodepool"
+  effect: "NoSchedule"
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: agentpool
+          operator: In
+          values:
+          - $storageNodepool
+        - key: beta.kubernetes.io/os
+          operator: In
+          values:
+          - linux
 "@
 
     if ($storageType -eq "nodepool") {
@@ -35,8 +55,6 @@ persistence:
       hostPath:
         path: $storagePath
         type: DirectoryOrCreate
-nodeSelector:
-  agentpool: $storageNodepool
 "@
     }
     elseif ($storageType -eq "managed-disk") {
